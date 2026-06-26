@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sohoa.ScanAgent.Core/Sohoa.ScanAgent.Core.csproj" />
+    <Project Path="src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj" />
+  </Folder>
+</Solution>

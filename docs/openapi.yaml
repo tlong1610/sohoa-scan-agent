@@ -1,0 +1,329 @@
+openapi: 3.1.0
+info:
+  title: Sohoa Scan Agent API
+  version: 1.0.0
+  description: |
+    Local HTTP API served by Sohoa Scan Agent on http://127.0.0.1:18612.
+    Called by the React frontend to control TWAIN scanning, manage staging,
+    and export PDFs before committing to the data-lake.
+
+servers:
+  - url: http://127.0.0.1:18612
+
+paths:
+  /health:
+    get:
+      summary: Agent health check
+      responses:
+        "200":
+          description: Agent is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: "1.0.0" }
+
+  /sessions:
+    get:
+      summary: List all draft sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScanSession" }
+    post:
+      summary: Create a new scan session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                projectCode: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanSession" }
+
+  /sessions/{sessionId}:
+    get:
+      summary: Get session details
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Session, content: { application/json: { schema: { $ref: "#/components/schemas/ScanSession" } } } }
+        "404": { description: Not found }
+    delete:
+      summary: Delete session (after commit or cancel)
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Not found }
+
+  /sessions/{sessionId}/dossiers:
+    post:
+      summary: Add dossier (folder) to session
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201": { description: Created dossier, content: { application/json: { schema: { $ref: "#/components/schemas/ScanDossier" } } } }
+
+  /sessions/{sessionId}/dossiers/{dossierId}:
+    delete:
+      summary: Delete dossier and all its documents/pages
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - { name: dossierId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+  /dossiers/{dossierId}:
+    patch:
+      summary: Rename or reorder dossier
+      parameters:
+        - { name: dossierId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, nullable: true }
+                sortOrder: { type: integer, nullable: true }
+      responses:
+        "200": { description: Updated dossier, content: { application/json: { schema: { $ref: "#/components/schemas/ScanDossier" } } } }
+
+  /sessions/{sessionId}/dossiers/{dossierId}/documents:
+    post:
+      summary: Add document to dossier
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - { name: dossierId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201": { description: Created document, content: { application/json: { schema: { $ref: "#/components/schemas/ScanDocument" } } } }
+
+  /sessions/{sessionId}/dossiers/{dossierId}/documents/{documentId}:
+    delete:
+      summary: Delete document and all its pages
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - { name: dossierId, in: path, required: true, schema: { type: string } }
+        - { name: documentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+  /documents/{documentId}:
+    patch:
+      summary: Rename or reorder document
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, nullable: true }
+                sortOrder: { type: integer, nullable: true }
+      responses:
+        "200": { description: Updated document }
+
+  /documents/{documentId}/scan:
+    post:
+      summary: Scan one page into this document (calls TWAIN)
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                showUi: { type: boolean, default: true }
+                dpi: { type: integer, default: 300 }
+                colorMode: { type: string, enum: [bw, gray, color], default: bw }
+      responses:
+        "200":
+          description: Scanned page or cancelled
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/PageMeta"
+                  - type: object
+                    properties:
+                      cancelled: { type: boolean }
+
+  /documents/{documentId}/export:
+    post:
+      summary: Export document pages to PDF (stored locally, not uploaded)
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Exported PDF path
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documentId: { type: string }
+                  pdfPath: { type: string }
+                  pageCount: { type: integer }
+
+  /pages/{pageId}/preview:
+    get:
+      summary: Get JPEG thumbnail of a page (max 600px, with rotate/crop applied)
+      parameters:
+        - { name: pageId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: JPEG image
+          content:
+            image/jpeg: {}
+
+  /pages/{pageId}/rotate:
+    post:
+      summary: Rotate page
+      parameters:
+        - { name: pageId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+        - { name: documentId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [degrees]
+              properties:
+                degrees: { type: integer, enum: [90, 180, 270] }
+      responses:
+        "200": { description: Updated page }
+
+  /pages/{pageId}/crop:
+    post:
+      summary: Set crop rectangle for page
+      parameters:
+        - { name: pageId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+        - { name: documentId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CropRect" }
+      responses:
+        "200": { description: Updated page }
+
+  /pages/{pageId}:
+    patch:
+      summary: Reorder page within its document
+      parameters:
+        - { name: pageId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+        - { name: documentId, in: query, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sortOrder]
+              properties:
+                sortOrder: { type: integer }
+      responses:
+        "200": { description: Updated page }
+    delete:
+      summary: Delete page
+      parameters:
+        - { name: pageId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+        - { name: documentId, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+components:
+  schemas:
+    PageMeta:
+      type: object
+      properties:
+        id: { type: string }
+        tiffPath: { type: string }
+        rotation: { type: integer }
+        crop: { $ref: "#/components/schemas/CropRect", nullable: true }
+        sortOrder: { type: integer }
+        scannedAt: { type: string, format: date-time }
+
+    CropRect:
+      type: object
+      properties:
+        x: { type: integer }
+        y: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+
+    ScanDocument:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        sortOrder: { type: integer }
+        pageIds: { type: array, items: { type: string } }
+        exportStatus: { type: string, enum: [draft, exported] }
+        exportedPdfPath: { type: string, nullable: true }
+
+    ScanDossier:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        sortOrder: { type: integer }
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/ScanDocument" }
+
+    ScanSession:
+      type: object
+      properties:
+        id: { type: string }
+        projectCode: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        status: { type: string, enum: [draft, committed] }
+        dossiers:
+          type: array
+          items: { $ref: "#/components/schemas/ScanDossier" }

@@ -1,0 +1,14 @@
+## .NET
+bin/
+obj/
+*.user
+.vs/
+*.suo
+*.ncrunch*
+.DS_Store
+
+## Build output
+installer/Output/
+
+## Logs
+*.log

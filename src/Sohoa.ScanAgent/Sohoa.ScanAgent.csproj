@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- <ApplicationIcon>Resources\scanner.ico</ApplicationIcon> -->
+    <AssemblyName>SohoaScanAgent</AssemblyName>
+    <RootNamespace>Sohoa.ScanAgent</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <StartupObject>Sohoa.ScanAgent.ScanAgentApp</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sohoa.ScanAgent.Core\Sohoa.ScanAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.0" />
+    <PackageReference Include="NTwain" Version="3.7.3" />
+  </ItemGroup>
+
+</Project>
