@@ -9,6 +9,9 @@ obj/
 
 ## Build output
 installer/Output/
+publish-test/
+publish/
+dist/
 
 ## Logs
 *.log

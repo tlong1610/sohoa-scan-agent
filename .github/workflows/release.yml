@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish self-contained app
+        run: >
+          dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $zipName = "SohoaScanAgent-$version-win-x64.zip"
+          Compress-Archive -Path publish/SohoaScanAgent.exe -DestinationPath $zipName
+          "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Sohoa Scan Agent ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ env.ZIP_NAME }}
+          body: |
+            ## Cài đặt trên máy quét (Windows 64-bit)
+
+            1. Tải file **${{ env.ZIP_NAME }}** bên dưới
+            2. Giải nén → chạy `SohoaScanAgent.exe`
+            3. Cài driver TWAIN Plustek PS4080U (nếu chưa có)
+            4. Mở web Sohoa trên **cùng máy** → vào màn hình quét tài liệu
+
+            Agent chạy nền tại `http://127.0.0.1:18612` (chỉ localhost).
+
+            ### Yêu cầu
+            - Windows 10/11 64-bit
+            - Máy scan TWAIN cắm USB (ví dụ Plustek PS4080U)
+            - Không cần cài .NET Runtime (đã gói sẵn trong file exe)

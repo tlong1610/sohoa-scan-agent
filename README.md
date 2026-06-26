@@ -8,10 +8,26 @@ Windows desktop agent for TWAIN document scanning (Plustek PS4080U and compatibl
 
 ## Install (scan workstation)
 
-1. Install Plustek PS4080U TWAIN driver
-2. Download `SohoaScanAgent-Setup.exe` from [Releases](https://github.com/tlong1610/sohoa-scan-agent/releases) (when available)
-3. Run installer — agent starts in system tray
-4. Open Sohoa web app on the same PC and use Scan Intake
+1. Install Plustek PS4080U TWAIN driver (or your scanner's TWAIN driver)
+2. Download the latest **`SohoaScanAgent-vX.X.X-win-x64.zip`** from [Releases](https://github.com/tlong1610/sohoa-scan-agent/releases)
+3. Extract and run `SohoaScanAgent.exe` — agent appears in the system tray
+4. (Recommended) Add a shortcut to `shell:startup` so it runs on login
+5. Open the Sohoa web app on the **same PC** and use Scan Intake
+
+See [docs/INSTALL.md](docs/INSTALL.md) for detailed Vietnamese instructions.
+
+Verify agent: open `http://127.0.0.1:18612/health` in a browser on the scan PC.
+
+## Create a new release (maintainers)
+
+Push a version tag to trigger the GitHub Actions build:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow builds a self-contained Windows x64 exe and attaches it to a GitHub Release automatically.
 
 ## Build from source
 
