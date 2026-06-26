@@ -1,44 +1,62 @@
+using Sohoa.ScanAgent.Api;
+using Sohoa.ScanAgent.Core.Services;
+using Sohoa.ScanAgent.Services;
+
 namespace Sohoa.ScanAgent;
 
 /// <summary>
-/// WinForms ApplicationContext that shows a system-tray icon.
-/// Provides the HWND needed for TWAIN and keeps the app alive.
+/// WinForms tray app — keeps process alive and provides HWND for TWAIN.
 /// </summary>
 public class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
-    private readonly Form _hiddenForm;
+    private readonly Form _mainForm;
+    private readonly CancellationTokenSource _cts = new();
 
-    public IntPtr WindowHandle => _hiddenForm.Handle;
-
-    public TrayApplicationContext()
+    public TrayApplicationContext(StagingService staging, TwainService twain)
     {
-        _hiddenForm = new Form
+        _mainForm = new Form
         {
+            Text = "Sohoa Scan Agent",
             WindowState = FormWindowState.Minimized,
             ShowInTaskbar = false,
-            Visible = false,
             Width = 1,
-            Height = 1
+            Height = 1,
         };
-        _hiddenForm.Load += (_, _) => _hiddenForm.Hide();
+
+        _mainForm.Load += (_, _) =>
+        {
+            _mainForm.Hide();
+
+            // Start HTTP API once we have a valid window handle for TWAIN
+            _ = Task.Run(() => ApiServer.RunAsync(
+                staging,
+                twain,
+                _mainForm.Handle,
+                _cts.Token));
+        };
+
+        _mainForm.FormClosed += (_, _) => ExitThread();
 
         var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "scanner.ico");
-        var icon = File.Exists(iconPath)
-            ? new Icon(iconPath)
-            : SystemIcons.Application;
+        var icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
 
         _trayIcon = new NotifyIcon
         {
             Icon = icon,
             Text = "Sohoa Scan Agent",
             Visible = true,
-            ContextMenuStrip = BuildContextMenu()
+            ContextMenuStrip = BuildContextMenu(),
         };
 
         _trayIcon.DoubleClick += (_, _) => ShowStatusInfo();
 
-        Application.Run(_hiddenForm);
+        // Show balloon so user knows the app started (tray icon may be hidden in overflow)
+        _trayIcon.BalloonTipTitle = "Sohoa Scan Agent";
+        _trayIcon.BalloonTipText = "Đang chạy tại http://127.0.0.1:18612";
+        _trayIcon.ShowBalloonTip(3000);
+
+        MainForm = _mainForm;
     }
 
     private ContextMenuStrip BuildContextMenu()
@@ -64,13 +82,17 @@ public class TrayApplicationContext : ApplicationContext
     private void OnExit(object? sender, EventArgs e)
     {
         _trayIcon.Visible = false;
-        ScanAgentApp.Shutdown();
+        _cts.Cancel();
         Application.Exit();
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _trayIcon?.Dispose();
+        if (disposing)
+        {
+            _cts.Cancel();
+            _trayIcon?.Dispose();
+        }
         base.Dispose(disposing);
     }
 }
