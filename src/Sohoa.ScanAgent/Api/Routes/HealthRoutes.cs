@@ -31,7 +31,7 @@ public static class HealthRoutes
             return Results.Ok(new
             {
                 status = "ok",
-                version = "1.0.4",
+                version = "2.0.0",
                 agent = "Sohoa Scan Agent",
                 processBitness = bitness,
                 twainSources = sources,

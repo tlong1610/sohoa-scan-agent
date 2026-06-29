@@ -1,19 +1,15 @@
 using Sohoa.ScanAgent.Api;
-using Sohoa.ScanAgent.Core.Services;
 using Sohoa.ScanAgent.Services;
 
 namespace Sohoa.ScanAgent;
 
-/// <summary>
-/// WinForms tray app — keeps process alive and provides HWND for TWAIN.
-/// </summary>
 public class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
     private readonly Form _mainForm;
     private readonly CancellationTokenSource _cts = new();
 
-    public TrayApplicationContext(StagingService staging, TwainService twain)
+    public TrayApplicationContext(TwainService twain)
     {
         _mainForm = new Form
         {
@@ -29,9 +25,7 @@ public class TrayApplicationContext : ApplicationContext
             _mainForm.Hide();
             ScanAgentApp.UiInvoker = _mainForm;
 
-            // Start HTTP API once we have a valid window handle for TWAIN
             _ = Task.Run(() => ApiServer.RunAsync(
-                staging,
                 twain,
                 _mainForm.Handle,
                 _cts.Token));
@@ -63,7 +57,7 @@ public class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Sohoa Scan Agent v1.0", null, null).Enabled = false;
+        menu.Items.Add("Sohoa Scan Agent v2.0", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Trạng thái: Đang chạy (:18612)", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());

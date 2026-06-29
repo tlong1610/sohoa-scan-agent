@@ -1,4 +1,3 @@
-using Sohoa.ScanAgent.Core.Services;
 using Sohoa.ScanAgent.Services;
 
 namespace Sohoa.ScanAgent;
@@ -20,10 +19,9 @@ public static class ScanAgentApp
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
                 ShowFatalError(e.ExceptionObject as Exception);
 
-            var staging = new StagingService();
-            var twain = new TwainService(staging);
+            var twain = new TwainService();
 
-            Application.Run(new TrayApplicationContext(staging, twain));
+            Application.Run(new TrayApplicationContext(twain));
         }
         catch (Exception ex)
         {

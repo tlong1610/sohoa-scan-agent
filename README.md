@@ -3,13 +3,13 @@
 Windows desktop agent for TWAIN document scanning (Plustek PS4080U and compatible scanners).
 
 - Runs locally on scan workstations (`http://127.0.0.1:18612`)
-- Staging: scan → edit → export PDF → commit to Sohoa data-lake via web app
-- Stack: .NET 8, NTwain, SkiaSharp, PDFsharp
+- **v2:** Stateless TWAIN bridge — `POST /scan` uploads JPEG to MinIO presigned URL (no local staging)
+- Stack: .NET 8, NTwain
 
 ## Install (scan workstation)
 
-1. Install Plustek PS4080U TWAIN driver (or your scanner's TWAIN driver)
-2. Download the latest **`SohoaScanAgent-vX.X.X-win-x64.zip`** from [Releases](https://github.com/tlong1610/sohoa-scan-agent/releases)
+1. Install Plustek PS4080U TWAIN driver (32-bit TWAIN → use **win-x86** build)
+2. Download **`SohoaScanAgent-2.0.0-win-x86.zip`** from [Releases](https://github.com/tlong1610/sohoa-scan-agent/releases)
 3. Extract and run `SohoaScanAgent.exe` — agent appears in the system tray
 4. (Recommended) Add a shortcut to `shell:startup` so it runs on login
 5. Open the Sohoa web app on the **same PC** and use Scan Intake

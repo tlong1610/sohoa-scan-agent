@@ -1,26 +1,22 @@
+using System.Drawing.Imaging;
+using System.Net.Http.Headers;
 using System.Reflection;
 using NTwain;
 using NTwain.Data;
-using Sohoa.ScanAgent.Core.Models;
-using Sohoa.ScanAgent.Core.Services;
 
 namespace Sohoa.ScanAgent.Services;
 
 /// <summary>
-/// Wraps NTwain 3.x to scan one page at a time.
-/// Events (TransferReady, DataTransferred, TransferError, SourceDisabled) live on TwainSession.
-/// Must be invoked on the STA (WinForms) thread because TWAIN requires a window handle.
+/// Stateless TWAIN bridge — scans to JPEG in memory, optional upload to presigned URL.
+/// TWAIN methods must run on the WinForms STA thread.
 /// </summary>
 public class TwainService
 {
-    private readonly StagingService _staging;
-
-    public TwainService(StagingService staging)
+    private static readonly HttpClient Http = new()
     {
-        _staging = staging;
-    }
+        Timeout = TimeSpan.FromMinutes(2),
+    };
 
-    /// <summary>Returns names of all available TWAIN data sources on this machine.</summary>
     public List<string> GetSources()
     {
         var session = new TwainSession(BuildAppId());
@@ -30,67 +26,40 @@ public class TwainService
         return names;
     }
 
-    /// <summary>
-    /// Scans a single page and appends it to the given document.
-    /// showUi = true opens the scanner's TWAIN UI dialog.
-    /// Must be called on the STA thread; blocks until transfer or cancel.
-    /// Returns the new PageMeta on success, null if the user cancelled.
-    /// </summary>
-    public PageMeta? ScanOnePage(
-        string sessionId,
-        string dossierId,
-        string documentId,
+    /// <summary>Scan one page on STA thread. Returns null if cancelled.</summary>
+    public byte[]? ScanOnePageJpeg(
         bool showUi,
         int dpi,
         string colorMode,
+        string? twainSource,
         IntPtr windowHandle)
     {
         var twainSession = new TwainSession(BuildAppId());
         twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
 
-        var source = twainSession.FirstOrDefault(s =>
-                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) &&
-                s.Name.Contains("twain", StringComparison.OrdinalIgnoreCase))
-            ?? twainSession.FirstOrDefault(s =>
-                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) ||
-                s.Name.Contains("ps4080", StringComparison.OrdinalIgnoreCase))
-            ?? twainSession.FirstOrDefault()
-            ?? throw new InvalidOperationException(
-                "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and use the 32-bit (x86) Scan Agent build.");
-
+        var source = ResolveSource(twainSession, twainSource);
         source.Open();
         ConfigureSource(source, dpi, colorMode);
 
-        var tcs = new TaskCompletionSource<PageMeta?>(
+        var tcs = new TaskCompletionSource<byte[]?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        twainSession.TransferReady += (s, e) =>
-        {
-            e.CancelAll = false;
-        };
+        twainSession.TransferReady += (_, e) => e.CancelAll = false;
 
-        twainSession.DataTransferred += (s, e) =>
+        twainSession.DataTransferred += (_, e) =>
         {
             try
             {
                 var imageStream = e.GetNativeImageStream();
-                if (imageStream != null)
-                {
-                    var pageId = Guid.NewGuid().ToString();
-                    var tiffPath = _staging.GetPageTiffPath(sessionId, dossierId, documentId, pageId);
-                    Directory.CreateDirectory(Path.GetDirectoryName(tiffPath)!);
-
-                    using var bmp = System.Drawing.Image.FromStream(imageStream);
-                    bmp.Save(tiffPath, System.Drawing.Imaging.ImageFormat.Tiff);
-                    imageStream.Dispose();
-
-                    var page = _staging.AddPage(sessionId, dossierId, documentId, tiffPath);
-                    tcs.TrySetResult(page);
-                }
-                else
+                if (imageStream is null)
                 {
                     tcs.TrySetResult(null);
+                    return;
                 }
+
+                using var bmp = System.Drawing.Image.FromStream(imageStream);
+                imageStream.Dispose();
+                tcs.TrySetResult(EncodeJpeg(bmp));
             }
             catch (Exception ex)
             {
@@ -98,25 +67,19 @@ public class TwainService
             }
         };
 
-        twainSession.TransferError += (s, e) =>
+        twainSession.TransferError += (_, e) =>
         {
             tcs.TrySetException(
                 e.Exception ?? new InvalidOperationException("Unknown TWAIN transfer error"));
         };
 
-        twainSession.SourceDisabled += (s, e) =>
-        {
-            // User closed scan UI without scanning
-            tcs.TrySetResult(null);
-        };
+        twainSession.SourceDisabled += (_, _) => tcs.TrySetResult(null);
 
         source.Enable(
             showUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI,
             showUi,
             windowHandle);
 
-        // Must pump WinForms messages while waiting — Task.Wait() on the STA thread
-        // blocks the message loop and prevents the TWAIN dialog from appearing.
         var deadline = DateTime.UtcNow.AddSeconds(120);
         while (!tcs.Task.IsCompleted)
         {
@@ -135,12 +98,51 @@ public class TwainService
 
         if (tcs.Task.IsFaulted)
         {
-            var ex = tcs.Task.Exception?.GetBaseException()
+            throw tcs.Task.Exception?.GetBaseException()
                 ?? new InvalidOperationException("TWAIN scan failed");
-            throw ex;
         }
 
         return tcs.Task.IsCompletedSuccessfully ? tcs.Task.Result : null;
+    }
+
+    public async Task UploadJpegAsync(string uploadUrl, byte[] jpegBytes)
+    {
+        using var content = new ByteArrayContent(jpegBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+
+        using var response = await Http.PutAsync(uploadUrl, content);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private static DataSource ResolveSource(TwainSession session, string? twainSource)
+    {
+        if (!string.IsNullOrWhiteSpace(twainSource))
+        {
+            var named = session.FirstOrDefault(s =>
+                s.Name.Equals(twainSource, StringComparison.OrdinalIgnoreCase));
+            if (named is not null) return named;
+        }
+
+        return session.FirstOrDefault(s =>
+                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) &&
+                s.Name.Contains("twain", StringComparison.OrdinalIgnoreCase))
+            ?? session.FirstOrDefault(s =>
+                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("ps4080", StringComparison.OrdinalIgnoreCase))
+            ?? session.FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and use the 32-bit (x86) Scan Agent build.");
+    }
+
+    private static byte[] EncodeJpeg(System.Drawing.Image bmp)
+    {
+        using var ms = new MemoryStream();
+        var encoder = ImageCodecInfo.GetImageEncoders()
+            .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+        using var encParams = new EncoderParameters(1);
+        encParams.Param[0] = new EncoderParameter(Encoder.Quality, 88L);
+        bmp.Save(ms, encoder, encParams);
+        return ms.ToArray();
     }
 
     private static void ConfigureSource(DataSource source, int dpi, string colorMode)
@@ -149,7 +151,7 @@ public class TwainService
         {
             "color" => PixelType.RGB,
             "gray" or "grayscale" => PixelType.Gray,
-            _ => PixelType.BlackWhite
+            _ => PixelType.BlackWhite,
         };
 
         source.Capabilities.ICapXResolution.SetValue((TWFix32)dpi);
@@ -167,10 +169,9 @@ public class TwainService
         if (!string.IsNullOrEmpty(assembly.Location))
             return TWIdentity.CreateFromAssembly(DataGroups.Image, assembly);
 
-        // Single-file publish leaves Assembly.Location empty; CreateFromAssembly throws.
         return TWIdentity.Create(
             DataGroups.Image,
-            assembly.GetName().Version ?? new Version(1, 0, 0),
+            assembly.GetName().Version ?? new Version(2, 0, 0),
             "Sohoa",
             "Scan Agent",
             "Sohoa Scan Agent",
