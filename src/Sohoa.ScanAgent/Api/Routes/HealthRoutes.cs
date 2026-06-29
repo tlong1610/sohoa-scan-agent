@@ -6,19 +6,20 @@ public static class HealthRoutes
 {
     public static void Map(WebApplication app)
     {
-        app.MapGet("/health", (TwainService twain) =>
+        app.MapGet("/health", (TwainService twain, WindowHandleAccessor hwnd, bool? refresh) =>
         {
-            List<string> sources;
-            string? twainError = null;
-            try
+            if (refresh == true)
+                twain.QueueRefreshSources(hwnd.Handle);
+            else
             {
-                sources = twain.GetSources();
+                var snapshot = twain.GetHealthSnapshot();
+                if (snapshot.IsStale && !twain.IsRefreshInFlight)
+                    twain.QueueRefreshSources(hwnd.Handle);
             }
-            catch (Exception ex)
-            {
-                sources = [];
-                twainError = ex.Message;
-            }
+
+            var health = twain.GetHealthSnapshot();
+            var sources = health.Sources;
+            var twainError = health.TwainError;
 
             var bitness = Environment.Is64BitProcess ? "x64" : "x86";
             string? twainHint = null;
@@ -31,12 +32,15 @@ public static class HealthRoutes
             return Results.Ok(new
             {
                 status = "ok",
-                version = "2.0.3",
+                version = "2.0.4",
                 agent = "Sohoa Scan Agent",
                 processBitness = bitness,
                 twainSources = sources,
                 twainError,
                 twainHint,
+                sourcesCachedAt = health.CachedAtUtc == DateTime.MinValue
+                    ? (DateTime?)null
+                    : health.CachedAtUtc,
             });
         });
     }

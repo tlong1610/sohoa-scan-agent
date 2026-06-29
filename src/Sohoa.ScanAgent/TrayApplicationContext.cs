@@ -25,6 +25,8 @@ public class TrayApplicationContext : ApplicationContext
             _mainForm.Hide();
             ScanAgentApp.UiInvoker = _mainForm;
 
+            twain.QueueRefreshSources(_mainForm.Handle);
+
             _ = Task.Run(() => ApiServer.RunAsync(
                 twain,
                 _mainForm.Handle,
@@ -57,7 +59,7 @@ public class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Sohoa Scan Agent v2.0", null, null).Enabled = false;
+        menu.Items.Add("Sohoa Scan Agent v2.0.4", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Trạng thái: Đang chạy (:18612)", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());

@@ -3,6 +3,7 @@ using System.Reflection;
 using NTwain;
 using NTwain.Data;
 using SkiaSharp;
+using Sohoa.ScanAgent;
 
 namespace Sohoa.ScanAgent.Services;
 
@@ -13,18 +14,84 @@ namespace Sohoa.ScanAgent.Services;
 public class TwainService
 {
     private static readonly object ScanSync = new();
+    private static readonly TimeSpan MessagePumpInterval = TimeSpan.FromMilliseconds(50);
     private static readonly HttpClient Http = new()
     {
         Timeout = TimeSpan.FromMinutes(2),
     };
 
-    public List<string> GetSources()
+    private readonly object _sourceCacheLock = new();
+    private IReadOnlyList<string> _cachedSources = [];
+    private string? _cachedTwainError;
+    private DateTime _sourcesCachedAtUtc = DateTime.MinValue;
+    private int _refreshInFlight;
+
+    public TwainHealthSnapshot GetHealthSnapshot()
     {
-        var session = new TwainSession(BuildAppId());
+        lock (_sourceCacheLock)
+        {
+            return new TwainHealthSnapshot(
+                _cachedSources,
+                _cachedTwainError,
+                _sourcesCachedAtUtc);
+        }
+    }
+
+    public bool IsRefreshInFlight => Volatile.Read(ref _refreshInFlight) == 1;
+
+    /// <summary>
+    /// Refresh TWAIN source list on the UI (STA) thread. Never blocks the HTTP thread.
+    /// </summary>
+    public void QueueRefreshSources(IntPtr windowHandle)
+    {
+        if (windowHandle == IntPtr.Zero)
+            return;
+
+        if (Interlocked.CompareExchange(ref _refreshInFlight, 1, 0) != 0)
+            return;
+
+        var invoker = ScanAgentApp.UiInvoker;
+        if (invoker is null || invoker.IsDisposed)
+        {
+            Interlocked.Exchange(ref _refreshInFlight, 0);
+            return;
+        }
+
+        invoker.BeginInvoke(() =>
+        {
+            try
+            {
+                RefreshSourcesCore(windowHandle);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _refreshInFlight, 0);
+            }
+        });
+    }
+
+    private void RefreshSourcesCore(IntPtr windowHandle)
+    {
+        TwainSession? session = null;
         try
         {
-            session.Open();
-            return session.Select(s => s.Name).ToList();
+            session = new TwainSession(BuildAppId());
+            session.Open(new WindowsFormsMessageLoopHook(windowHandle));
+            var names = session.Select(s => s.Name).ToList();
+            lock (_sourceCacheLock)
+            {
+                _cachedSources = names;
+                _cachedTwainError = null;
+                _sourcesCachedAtUtc = DateTime.UtcNow;
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (_sourceCacheLock)
+            {
+                _cachedTwainError = ex.Message;
+                _sourcesCachedAtUtc = DateTime.UtcNow;
+            }
         }
         finally
         {
@@ -85,6 +152,7 @@ public class TwainService
                 {
                     var timeoutSeconds = batchMode ? 600 : 120;
                     var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+                    var lastPump = DateTime.MinValue;
                     while (!tcs.Task.IsCompleted)
                     {
                         if (DateTime.UtcNow >= deadline)
@@ -93,8 +161,14 @@ public class TwainService
                             break;
                         }
 
-                        Application.DoEvents();
-                        Thread.Sleep(10);
+                        var now = DateTime.UtcNow;
+                        if (now - lastPump >= MessagePumpInterval)
+                        {
+                            Application.DoEvents();
+                            lastPump = now;
+                        }
+
+                        Thread.Sleep(15);
                     }
                 }
 
@@ -117,6 +191,7 @@ public class TwainService
                 }
 
                 SafeClose(twainSession, source);
+                QueueRefreshSources(windowHandle);
             }
 
             void OnTransferReady(object? _, TransferReadyEventArgs e)

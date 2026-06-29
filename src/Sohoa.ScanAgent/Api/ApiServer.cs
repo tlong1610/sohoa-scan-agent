@@ -14,6 +14,10 @@ public static class ApiServer
 
         builder.WebHost.UseUrls("http://127.0.0.1:18612");
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.Limits.MaxConcurrentConnections = 4;
+        });
 
         builder.Services.AddSingleton(twain);
         builder.Services.AddSingleton(new WindowHandleAccessor(windowHandle));
