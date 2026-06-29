@@ -20,7 +20,18 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish self-contained app
+      - name: Publish win-x86 (required for Plustek PS4080U TWAIN)
+        run: >
+          dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
+          -c Release
+          -r win-x86
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish-x86
+
+      - name: Publish win-x64 (optional, for 64-bit TWAIN drivers)
         run: >
           dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
           -c Release
@@ -29,33 +40,36 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true
-          -o publish
+          -o publish-x64
 
-      - name: Package zip
+      - name: Package zips
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          $zipName = "SohoaScanAgent-$version-win-x64.zip"
-          Compress-Archive -Path publish/SohoaScanAgent.exe -DestinationPath $zipName
-          "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          $x86 = "SohoaScanAgent-$version-win-x86.zip"
+          $x64 = "SohoaScanAgent-$version-win-x64.zip"
+          Compress-Archive -Path publish-x86/SohoaScanAgent.exe -DestinationPath $x86
+          Compress-Archive -Path publish-x64/SohoaScanAgent.exe -DestinationPath $x64
+          "ZIP_X86=$x86" >> $env:GITHUB_ENV
+          "ZIP_X64=$x64" >> $env:GITHUB_ENV
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Sohoa Scan Agent ${{ github.ref_name }}
           generate_release_notes: true
-          files: ${{ env.ZIP_NAME }}
+          files: |
+            ${{ env.ZIP_X86 }}
+            ${{ env.ZIP_X64 }}
           body: |
-            ## Cài đặt trên máy quét (Windows 64-bit)
+            ## Cài đặt trên máy quét (Windows)
 
-            1. Tải file **${{ env.ZIP_NAME }}** bên dưới
+            ### Plustek PS4080U → dùng **win-x86**
+
+            Driver TWAIN Plustek chỉ có bản **32-bit**. Bản x64 sẽ thấy `twainSources: []`.
+
+            1. Tải **`${{ env.ZIP_X86 }}`**
             2. Giải nén → chạy `SohoaScanAgent.exe`
-            3. Cài driver TWAIN Plustek PS4080U (nếu chưa có)
-            4. Mở web Sohoa trên **cùng máy** → vào màn hình quét tài liệu
+            3. Kiểm tra `http://127.0.0.1:18612/health` → `processBitness: "x86"` và `twainSources` không rỗng
 
-            Agent chạy nền tại `http://127.0.0.1:18612` (chỉ localhost).
-
-            ### Yêu cầu
-            - Windows 10/11 64-bit
-            - Máy scan TWAIN cắm USB (ví dụ Plustek PS4080U)
-            - Không cần cài .NET Runtime (đã gói sẵn trong file exe)
+            Agent: `http://127.0.0.1:18612` (localhost only).

@@ -49,11 +49,14 @@ public class TwainService
         twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
 
         var source = twainSession.FirstOrDefault(s =>
+                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) &&
+                s.Name.Contains("twain", StringComparison.OrdinalIgnoreCase))
+            ?? twainSession.FirstOrDefault(s =>
                 s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) ||
                 s.Name.Contains("ps4080", StringComparison.OrdinalIgnoreCase))
             ?? twainSession.FirstOrDefault()
             ?? throw new InvalidOperationException(
-                "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and reconnect the scanner.");
+                "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and use the 32-bit (x86) Scan Agent build.");
 
         source.Open();
         ConfigureSource(source, dpi, colorMode);

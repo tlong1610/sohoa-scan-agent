@@ -11,6 +11,7 @@ obj/
 installer/Output/
 publish-test/
 publish-test2/
+publish-win-x86/
 publish/
 dist/
 
