@@ -20,17 +20,7 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish win-x86 (requires .NET 8 Desktop Runtime — lower RAM use)
-        run: >
-          dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
-          -c Release
-          -r win-x86
-          --self-contained false
-          -p:PublishSingleFile=true
-          -p:EnableCompressionInSingleFile=true
-          -o publish-x86
-
-      - name: Publish win-x86 standalone (optional, no .NET install needed)
+      - name: Publish win-x86 standalone (default — Plustek PS4080U TWAIN)
         run: >
           dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
           -c Release
@@ -39,7 +29,16 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true
-          -o publish-x86-standalone
+          -o publish-x86
+
+      - name: Publish win-x86 slim (optional — needs .NET 8 Desktop Runtime x86)
+        run: >
+          dotnet publish src/Sohoa.ScanAgent/Sohoa.ScanAgent.csproj
+          -c Release
+          -r win-x86
+          --self-contained false
+          -p:PublishSingleFile=true
+          -o publish-x86-slim
 
       - name: Publish win-x64 (optional, for 64-bit TWAIN drivers)
         run: >
@@ -57,13 +56,13 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           $x86 = "SohoaScanAgent-$version-win-x86.zip"
-          $x86Standalone = "SohoaScanAgent-$version-win-x86-standalone.zip"
+          $x86Slim = "SohoaScanAgent-$version-win-x86-slim.zip"
           $x64 = "SohoaScanAgent-$version-win-x64.zip"
-          Compress-Archive -Path publish-x86/SohoaScanAgent.exe -DestinationPath $x86
-          Compress-Archive -Path publish-x86-standalone/SohoaScanAgent.exe -DestinationPath $x86Standalone
-          Compress-Archive -Path publish-x64/SohoaScanAgent.exe -DestinationPath $x64
+          Compress-Archive -Path publish-x86/SohoaScanAgent.exe -DestinationPath $x86 -Force
+          Compress-Archive -Path publish-x86-slim/SohoaScanAgent.exe -DestinationPath $x86Slim -Force
+          Compress-Archive -Path publish-x64/SohoaScanAgent.exe -DestinationPath $x64 -Force
           "ZIP_X86=$x86" >> $env:GITHUB_ENV
-          "ZIP_X86_STANDALONE=$x86Standalone" >> $env:GITHUB_ENV
+          "ZIP_X86_SLIM=$x86Slim" >> $env:GITHUB_ENV
           "ZIP_X64=$x64" >> $env:GITHUB_ENV
 
       - name: Create GitHub Release
@@ -73,7 +72,7 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ env.ZIP_X86 }}
-            ${{ env.ZIP_X86_STANDALONE }}
+            ${{ env.ZIP_X86_SLIM }}
             ${{ env.ZIP_X64 }}
           body: |
             ## Cài đặt trên máy quét (Windows)
@@ -82,11 +81,10 @@ jobs:
 
             Driver TWAIN Plustek chỉ có bản **32-bit**.
 
-            **Khuyến nghị (nhẹ RAM hơn):** tải **`${{ env.ZIP_X86 }}`** — cần cài [.NET 8 Desktop Runtime x86](https://dotnet.microsoft.com/download/dotnet/8.0).
+            1. Tải **`${{ env.ZIP_X86 }}`** (standalone, không cần cài .NET)
+            2. Giải nén → chạy `SohoaScanAgent.exe`
+            3. Kiểm tra `http://127.0.0.1:18612/health` → `processBitness: "x86"` và `twainSources` không rỗng
 
-            **Không muốn cài .NET:** tải **`${{ env.ZIP_X86_STANDALONE }}`** (~75MB, tốn RAM hơn khi chạy).
-
-            1. Giải nén → chạy `SohoaScanAgent.exe`
-            2. Kiểm tra `http://127.0.0.1:18612/health` → `processBitness: "x86"` và `twainSources` không rỗng
+            **Tùy chọn nhẹ RAM hơn:** **`${{ env.ZIP_X86_SLIM }}`** — cần [.NET 8 Desktop Runtime x86](https://dotnet.microsoft.com/download/dotnet/8.0).
 
             Agent: `http://127.0.0.1:18612` (localhost only).

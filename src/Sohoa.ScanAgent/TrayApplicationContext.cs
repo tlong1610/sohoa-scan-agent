@@ -59,7 +59,7 @@ public class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Sohoa Scan Agent v2.0.4", null, null).Enabled = false;
+        menu.Items.Add("Sohoa Scan Agent v2.0.5", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Trạng thái: Đang chạy (:18612)", null, null).Enabled = false;
         menu.Items.Add(new ToolStripSeparator());
