@@ -94,7 +94,10 @@ public static class ScanRoutes
             if (result.Uploaded)
                 return Results.Ok(new { ok = true, uploaded = true, pageCount = result.PageCount });
 
-            return Results.File(result.Jpeg!, "image/jpeg");
+            if (result.Jpeg is { Length: > 0 })
+                return Results.File(result.Jpeg, "image/jpeg");
+
+            return Results.Ok(new { ok = true, cancelled = true });
         }
         catch (Exception ex)
         {

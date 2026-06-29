@@ -12,6 +12,7 @@ namespace Sohoa.ScanAgent.Services;
 /// </summary>
 public class TwainService
 {
+    private static readonly object ScanSync = new();
     private static readonly HttpClient Http = new()
     {
         Timeout = TimeSpan.FromMinutes(2),
@@ -20,17 +21,22 @@ public class TwainService
     public List<string> GetSources()
     {
         var session = new TwainSession(BuildAppId());
-        session.Open();
-        var names = session.Select(s => s.Name).ToList();
-        session.Close();
-        return names;
+        try
+        {
+            session.Open();
+            return session.Select(s => s.Name).ToList();
+        }
+        finally
+        {
+            SafeClose(session, source: null);
+        }
     }
 
     /// <summary>
     /// Scan one or more pages on STA thread.
     /// <paramref name="adf"/> scans until the feeder is empty.
     /// <paramref name="duplex"/> enables double-sided scanning (implies ADF).
-    /// Returns null if the user cancelled.
+    /// Returns null if the user cancelled or the feeder is empty.
     /// </summary>
     public List<byte[]>? ScanPagesJpeg(
         bool showUi,
@@ -41,95 +47,131 @@ public class TwainService
         bool duplex,
         IntPtr windowHandle)
     {
-        var batchMode = adf || duplex;
-        var pages = new List<byte[]>();
-
-        var twainSession = new TwainSession(BuildAppId());
-        twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
-
-        var source = ResolveSource(twainSession, twainSource);
-        source.Open();
-        ConfigureSource(source, dpi, colorMode, adf, duplex);
-
-        var tcs = new TaskCompletionSource<List<byte[]>?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        twainSession.TransferReady += (_, e) =>
+        lock (ScanSync)
         {
-            if (!batchMode && pages.Count >= 1)
-                e.CancelAll = true;
-            else
-                e.CancelAll = false;
-        };
+            var batchMode = adf || duplex;
+            var pages = new List<byte[]>();
+            TwainSession? twainSession = null;
+            DataSource? source = null;
 
-        twainSession.DataTransferred += (_, e) =>
-        {
+            var tcs = new TaskCompletionSource<List<byte[]>?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
             try
             {
-                var imageStream = e.GetNativeImageStream();
-                if (imageStream is null)
-                    return;
+                twainSession = new TwainSession(BuildAppId());
+                twainSession.StopOnTransferError = false;
+                twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
 
-                using (imageStream)
-                using (var buffer = new MemoryStream())
+                source = ResolveSource(twainSession, twainSource);
+                source.Open();
+                ConfigureSource(source, dpi, colorMode, adf, duplex);
+
+                twainSession.TransferReady += OnTransferReady;
+                twainSession.DataTransferred += OnDataTransferred;
+                twainSession.TransferError += OnTransferError;
+                twainSession.SourceDisabled += OnSourceDisabled;
+
+                var enableRc = source.Enable(
+                    showUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI,
+                    showUi,
+                    windowHandle);
+
+                if (enableRc != ReturnCode.Success)
                 {
-                    imageStream.CopyTo(buffer);
-                    buffer.Position = 0;
-                    pages.Add(EncodeJpeg(buffer));
+                    tcs.TrySetResult(null);
+                }
+                else
+                {
+                    var timeoutSeconds = batchMode ? 600 : 120;
+                    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+                    while (!tcs.Task.IsCompleted)
+                    {
+                        if (DateTime.UtcNow >= deadline)
+                        {
+                            tcs.TrySetResult(pages.Count > 0 ? pages : null);
+                            break;
+                        }
+
+                        Application.DoEvents();
+                        Thread.Sleep(10);
+                    }
                 }
 
-                if (!batchMode)
+                if (tcs.Task.IsFaulted)
+                {
+                    throw tcs.Task.Exception?.GetBaseException()
+                        ?? new InvalidOperationException("TWAIN scan failed");
+                }
+
+                return tcs.Task.IsCompletedSuccessfully ? tcs.Task.Result : null;
+            }
+            finally
+            {
+                if (twainSession is not null)
+                {
+                    twainSession.TransferReady -= OnTransferReady;
+                    twainSession.DataTransferred -= OnDataTransferred;
+                    twainSession.TransferError -= OnTransferError;
+                    twainSession.SourceDisabled -= OnSourceDisabled;
+                }
+
+                SafeClose(twainSession, source);
+            }
+
+            void OnTransferReady(object? _, TransferReadyEventArgs e)
+            {
+                if (!batchMode && pages.Count >= 1)
+                    e.CancelAll = true;
+                else
+                    e.CancelAll = false;
+            }
+
+            void OnDataTransferred(object? _, DataTransferredEventArgs e)
+            {
+                try
+                {
+                    var imageStream = e.GetNativeImageStream();
+                    if (imageStream is null)
+                        return;
+
+                    using (imageStream)
+                    using (var buffer = new MemoryStream())
+                    {
+                        imageStream.CopyTo(buffer);
+                        buffer.Position = 0;
+                        pages.Add(EncodeJpeg(buffer));
+                    }
+
+                    if (!batchMode)
+                        tcs.TrySetResult(pages);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            }
+
+            void OnTransferError(object? _, TransferErrorEventArgs e)
+            {
+                // End of ADF / no paper is normal after the last sheet — keep pages scanned so far.
+                if (pages.Count > 0)
+                {
                     tcs.TrySetResult(pages);
-            }
-            catch (Exception ex)
-            {
-                tcs.TrySetException(ex);
-            }
-        };
+                    return;
+                }
 
-        twainSession.TransferError += (_, e) =>
-        {
-            tcs.TrySetException(
-                e.Exception ?? new InvalidOperationException("Unknown TWAIN transfer error"));
-        };
-
-        twainSession.SourceDisabled += (_, _) =>
-        {
-            if (batchMode)
-                tcs.TrySetResult(pages.Count > 0 ? pages : null);
-            else if (!tcs.Task.IsCompleted)
                 tcs.TrySetResult(null);
-        };
-
-        source.Enable(
-            showUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI,
-            showUi,
-            windowHandle);
-
-        var timeoutSeconds = batchMode ? 600 : 120;
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-        while (!tcs.Task.IsCompleted)
-        {
-            if (DateTime.UtcNow >= deadline)
-            {
-                tcs.TrySetResult(batchMode && pages.Count > 0 ? pages : null);
-                break;
             }
 
-            Application.DoEvents();
-            Thread.Sleep(10);
+            void OnSourceDisabled(object? sender, EventArgs args)
+            {
+                if (batchMode)
+                    tcs.TrySetResult(pages.Count > 0 ? pages : null);
+                else if (!tcs.Task.IsCompleted)
+                    tcs.TrySetResult(pages.Count > 0 ? pages : null);
+            }
         }
-
-        source.Close();
-        twainSession.Close();
-
-        if (tcs.Task.IsFaulted)
-        {
-            throw tcs.Task.Exception?.GetBaseException()
-                ?? new InvalidOperationException("TWAIN scan failed");
-        }
-
-        return tcs.Task.IsCompletedSuccessfully ? tcs.Task.Result : null;
     }
 
     public async Task UploadJpegAsync(string uploadUrl, byte[] jpegBytes)
@@ -173,10 +215,6 @@ public class TwainService
                 "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and use the 32-bit (x86) Scan Agent build.");
     }
 
-    /// <summary>
-    /// TWAIN native transfers are often 1bpp indexed BMP/DIB — GDI+ JPEG encoder fails on those.
-    /// SkiaSharp handles all common TWAIN pixel formats.
-    /// </summary>
     private static byte[] EncodeJpeg(Stream imageStream)
     {
         using var bitmap = SKBitmap.Decode(imageStream)
@@ -198,22 +236,54 @@ public class TwainService
             _ => PixelType.BlackWhite,
         };
 
-        source.Capabilities.ICapXResolution.SetValue((TWFix32)dpi);
-        source.Capabilities.ICapYResolution.SetValue((TWFix32)dpi);
-        source.Capabilities.ICapPixelType.SetValue(pixelType);
-        source.Capabilities.ICapXferMech.SetValue(XferMech.Native);
+        SetCap(source.Capabilities.ICapXResolution, (TWFix32)dpi);
+        SetCap(source.Capabilities.ICapYResolution, (TWFix32)dpi);
+        SetCap(source.Capabilities.ICapPixelType, pixelType);
+        SetCap(source.Capabilities.ICapXferMech, XferMech.Native);
 
         var useFeeder = adf || duplex;
 
-        if (source.Capabilities.CapFeederEnabled.CanSet)
-            source.Capabilities.CapFeederEnabled.SetValue(useFeeder ? BoolType.True : BoolType.False);
+        SetCap(source.Capabilities.CapFeederEnabled, useFeeder ? BoolType.True : BoolType.False);
+        SetCap(source.Capabilities.CapAutoFeed, useFeeder ? BoolType.True : BoolType.False);
+        SetCap(source.Capabilities.CapDuplexEnabled, duplex ? BoolType.True : BoolType.False);
+    }
 
-        if (source.Capabilities.CapAutoFeed.CanSet)
-            source.Capabilities.CapAutoFeed.SetValue(useFeeder ? BoolType.True : BoolType.False);
-
-        if (source.Capabilities.CapDuplexEnabled.CanSet)
+    private static void SetCap<T>(ICapWrapper<T> cap, T value)
+    {
+        try
         {
-            source.Capabilities.CapDuplexEnabled.SetValue(duplex ? BoolType.True : BoolType.False);
+            if (cap.CanSet)
+                cap.SetValue(value);
+        }
+        catch
+        {
+            // Driver may not support this capability — ignore.
+        }
+    }
+
+    private static void SafeClose(TwainSession? session, DataSource? source)
+    {
+        if (session is null)
+            return;
+
+        try
+        {
+            if (source is not null && session.State >= 4)
+                source.Close();
+        }
+        catch
+        {
+            // TWAIN driver may already be disabled after feeder empty.
+        }
+
+        try
+        {
+            if (session.State >= 3)
+                session.Close();
+        }
+        catch
+        {
+            // Best-effort cleanup so the next scan can open a fresh session.
         }
     }
 
