@@ -14,6 +14,12 @@ publish-test2/
 publish-win-x86/
 publish-single-x86-test/
 publish-test-x86-no-single/
+publish-x86-test/
+publish-x86-standalone-test/
+publish-x86-compress-test/
+publish-x86-slim/
+publish-x86/
+publish-x64/
 publish/
 dist/
 
