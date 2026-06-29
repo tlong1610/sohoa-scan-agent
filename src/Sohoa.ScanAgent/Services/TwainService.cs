@@ -26,25 +26,41 @@ public class TwainService
         return names;
     }
 
-    /// <summary>Scan one page on STA thread. Returns null if cancelled.</summary>
-    public byte[]? ScanOnePageJpeg(
+    /// <summary>
+    /// Scan one or more pages on STA thread.
+    /// <paramref name="adf"/> scans until the feeder is empty.
+    /// <paramref name="duplex"/> enables double-sided scanning (implies ADF).
+    /// Returns null if the user cancelled.
+    /// </summary>
+    public List<byte[]>? ScanPagesJpeg(
         bool showUi,
         int dpi,
         string colorMode,
         string? twainSource,
+        bool adf,
+        bool duplex,
         IntPtr windowHandle)
     {
+        var batchMode = adf || duplex;
+        var pages = new List<byte[]>();
+
         var twainSession = new TwainSession(BuildAppId());
         twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
 
         var source = ResolveSource(twainSession, twainSource);
         source.Open();
-        ConfigureSource(source, dpi, colorMode);
+        ConfigureSource(source, dpi, colorMode, adf, duplex);
 
-        var tcs = new TaskCompletionSource<byte[]?>(
+        var tcs = new TaskCompletionSource<List<byte[]>?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        twainSession.TransferReady += (_, e) => e.CancelAll = false;
+        twainSession.TransferReady += (_, e) =>
+        {
+            if (!batchMode && pages.Count >= 1)
+                e.CancelAll = true;
+            else
+                e.CancelAll = false;
+        };
 
         twainSession.DataTransferred += (_, e) =>
         {
@@ -52,18 +68,18 @@ public class TwainService
             {
                 var imageStream = e.GetNativeImageStream();
                 if (imageStream is null)
-                {
-                    tcs.TrySetResult(null);
                     return;
-                }
 
                 using (imageStream)
                 using (var buffer = new MemoryStream())
                 {
                     imageStream.CopyTo(buffer);
                     buffer.Position = 0;
-                    tcs.TrySetResult(EncodeJpeg(buffer));
+                    pages.Add(EncodeJpeg(buffer));
                 }
+
+                if (!batchMode)
+                    tcs.TrySetResult(pages);
             }
             catch (Exception ex)
             {
@@ -77,19 +93,26 @@ public class TwainService
                 e.Exception ?? new InvalidOperationException("Unknown TWAIN transfer error"));
         };
 
-        twainSession.SourceDisabled += (_, _) => tcs.TrySetResult(null);
+        twainSession.SourceDisabled += (_, _) =>
+        {
+            if (batchMode)
+                tcs.TrySetResult(pages.Count > 0 ? pages : null);
+            else if (!tcs.Task.IsCompleted)
+                tcs.TrySetResult(null);
+        };
 
         source.Enable(
             showUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI,
             showUi,
             windowHandle);
 
-        var deadline = DateTime.UtcNow.AddSeconds(120);
+        var timeoutSeconds = batchMode ? 600 : 120;
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
         while (!tcs.Task.IsCompleted)
         {
             if (DateTime.UtcNow >= deadline)
             {
-                tcs.TrySetResult(null);
+                tcs.TrySetResult(batchMode && pages.Count > 0 ? pages : null);
                 break;
             }
 
@@ -116,6 +139,18 @@ public class TwainService
 
         using var response = await Http.PutAsync(uploadUrl, content);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task UploadJpegBatchAsync(IReadOnlyList<string> uploadUrls, IReadOnlyList<byte[]> pages)
+    {
+        if (pages.Count > uploadUrls.Count)
+        {
+            throw new InvalidOperationException(
+                $"Scanner returned {pages.Count} page(s) but only {uploadUrls.Count} upload URL(s) were provided.");
+        }
+
+        for (var i = 0; i < pages.Count; i++)
+            await UploadJpegAsync(uploadUrls[i], pages[i]);
     }
 
     private static DataSource ResolveSource(TwainSession session, string? twainSource)
@@ -154,7 +189,7 @@ public class TwainService
         return data.ToArray();
     }
 
-    private static void ConfigureSource(DataSource source, int dpi, string colorMode)
+    private static void ConfigureSource(DataSource source, int dpi, string colorMode, bool adf, bool duplex)
     {
         var pixelType = colorMode?.ToLowerInvariant() switch
         {
@@ -168,8 +203,18 @@ public class TwainService
         source.Capabilities.ICapPixelType.SetValue(pixelType);
         source.Capabilities.ICapXferMech.SetValue(XferMech.Native);
 
+        var useFeeder = adf || duplex;
+
         if (source.Capabilities.CapFeederEnabled.CanSet)
-            source.Capabilities.CapFeederEnabled.SetValue(BoolType.True);
+            source.Capabilities.CapFeederEnabled.SetValue(useFeeder ? BoolType.True : BoolType.False);
+
+        if (source.Capabilities.CapAutoFeed.CanSet)
+            source.Capabilities.CapAutoFeed.SetValue(useFeeder ? BoolType.True : BoolType.False);
+
+        if (source.Capabilities.CapDuplexEnabled.CanSet)
+        {
+            source.Capabilities.CapDuplexEnabled.SetValue(duplex ? BoolType.True : BoolType.False);
+        }
     }
 
     private static TWIdentity BuildAppId()
