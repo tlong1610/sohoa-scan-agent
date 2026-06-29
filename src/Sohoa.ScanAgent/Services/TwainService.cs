@@ -162,5 +162,33 @@ public class TwainService
     }
 
     private static TWIdentity BuildAppId()
-        => TWIdentity.CreateFromAssembly(DataGroups.Image, Assembly.GetExecutingAssembly());
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        if (!string.IsNullOrEmpty(assembly.Location))
+            return TWIdentity.CreateFromAssembly(DataGroups.Image, assembly);
+
+        // Single-file publish leaves Assembly.Location empty; CreateFromAssembly throws.
+        return TWIdentity.Create(
+            DataGroups.Image,
+            assembly.GetName().Version ?? new Version(1, 0, 0),
+            "Sohoa",
+            "Scan Agent",
+            "Sohoa Scan Agent",
+            ResolveExecutablePath());
+    }
+
+    private static string ResolveExecutablePath()
+    {
+        var exePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            var args = Environment.GetCommandLineArgs();
+            exePath = args.Length > 0 ? args[0] : null;
+        }
+
+        if (string.IsNullOrWhiteSpace(exePath))
+            exePath = Path.Combine(AppContext.BaseDirectory, "SohoaScanAgent.exe");
+
+        return Path.GetFullPath(exePath);
+    }
 }

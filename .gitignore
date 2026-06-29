@@ -12,6 +12,8 @@ installer/Output/
 publish-test/
 publish-test2/
 publish-win-x86/
+publish-single-x86-test/
+publish-test-x86-no-single/
 publish/
 dist/
 
