@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Sohoa Scan Agent API
-  version: 1.0.0
+  version: 1.0.2
   description: |
     Local HTTP API served by Sohoa Scan Agent on http://127.0.0.1:18612.
     Called by the React frontend to control TWAIN scanning, manage staging,
@@ -23,7 +23,11 @@ paths:
                 type: object
                 properties:
                   status: { type: string, example: ok }
-                  version: { type: string, example: "1.0.0" }
+                  version: { type: string, example: "1.0.2" }
+                  twainSources:
+                    type: array
+                    items: { type: string }
+                    description: Available TWAIN scanner names on this machine
 
   /sessions:
     get:
@@ -201,6 +205,20 @@ paths:
                   documentId: { type: string }
                   pdfPath: { type: string }
                   pageCount: { type: integer }
+
+  /documents/{documentId}/pdf:
+    get:
+      summary: Download exported PDF bytes (for frontend upload to data-lake)
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string } }
+        - { name: sessionId, in: query, required: true, schema: { type: string } }
+        - { name: dossierId, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf: {}
+        "404": { description: Not exported or not found }
 
   /pages/{pageId}/preview:
     get:

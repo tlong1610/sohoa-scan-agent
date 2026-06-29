@@ -48,9 +48,12 @@ public class TwainService
         var twainSession = new TwainSession(BuildAppId());
         twainSession.Open(new WindowsFormsMessageLoopHook(windowHandle));
 
-        var source = twainSession.FirstOrDefault()
+        var source = twainSession.FirstOrDefault(s =>
+                s.Name.Contains("plustek", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("ps4080", StringComparison.OrdinalIgnoreCase))
+            ?? twainSession.FirstOrDefault()
             ?? throw new InvalidOperationException(
-                "No TWAIN source found. Please install the Plustek PS4080U driver.");
+                "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and reconnect the scanner.");
 
         source.Open();
         ConfigureSource(source, dpi, colorMode);
@@ -109,12 +112,31 @@ public class TwainService
             showUi,
             windowHandle);
 
-        var completed = tcs.Task.Wait(TimeSpan.FromSeconds(120));
+        // Must pump WinForms messages while waiting — Task.Wait() on the STA thread
+        // blocks the message loop and prevents the TWAIN dialog from appearing.
+        var deadline = DateTime.UtcNow.AddSeconds(120);
+        while (!tcs.Task.IsCompleted)
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                tcs.TrySetResult(null);
+                break;
+            }
+
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
 
         source.Close();
         twainSession.Close();
 
-        if (!completed) return null;
+        if (tcs.Task.IsFaulted)
+        {
+            var ex = tcs.Task.Exception?.GetBaseException()
+                ?? new InvalidOperationException("TWAIN scan failed");
+            throw ex;
+        }
+
         return tcs.Task.IsCompletedSuccessfully ? tcs.Task.Result : null;
     }
 

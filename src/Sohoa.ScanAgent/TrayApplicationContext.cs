@@ -27,6 +27,7 @@ public class TrayApplicationContext : ApplicationContext
         _mainForm.Load += (_, _) =>
         {
             _mainForm.Hide();
+            ScanAgentApp.UiInvoker = _mainForm;
 
             // Start HTTP API once we have a valid window handle for TWAIN
             _ = Task.Run(() => ApiServer.RunAsync(

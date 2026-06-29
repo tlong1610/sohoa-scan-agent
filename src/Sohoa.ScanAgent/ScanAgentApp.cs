@@ -5,8 +5,8 @@ namespace Sohoa.ScanAgent;
 
 public static class ScanAgentApp
 {
-    /// <summary>STA dispatcher for marshalling TWAIN calls from the API thread.</summary>
-    public static Control? ScanDispatcher { get; private set; }
+    /// <summary>WinForms control on the STA thread (hidden main form) for TWAIN BeginInvoke.</summary>
+    public static Control? UiInvoker { get; set; }
 
     [STAThread]
     public static void Main()
@@ -22,10 +22,6 @@ public static class ScanAgentApp
 
             var staging = new StagingService();
             var twain = new TwainService(staging);
-
-            // Invisible control for BeginInvoke from API routes
-            ScanDispatcher = new Control();
-            var _ = ScanDispatcher.Handle; // force handle creation
 
             Application.Run(new TrayApplicationContext(staging, twain));
         }

@@ -73,11 +73,15 @@ public static class DocumentRoutes
 
             try
             {
+                var invoker = ScanAgentApp.UiInvoker;
+                if (invoker is null || invoker.IsDisposed)
+                    return Results.Problem("Scan Agent UI is not ready. Restart SohoaScanAgent.exe.");
+
                 PageMeta? page = null;
                 var tcs = new TaskCompletionSource<PageMeta?>();
 
-                // Marshal TWAIN call to STA thread
-                ScanAgentApp.ScanDispatcher?.BeginInvoke(() =>
+                // TWAIN must run on the STA WinForms thread with an active message pump
+                invoker.BeginInvoke(() =>
                 {
                     try
                     {
@@ -92,7 +96,7 @@ public static class DocumentRoutes
                     catch (Exception ex) { tcs.TrySetException(ex); }
                 });
 
-                page = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(120));
+                page = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(130));
                 if (page is null) return Results.Ok(new { cancelled = true });
                 return Results.Ok(page);
             }
@@ -128,6 +132,33 @@ public static class DocumentRoutes
 
             staging.MarkDocumentExported(sessionId, dossierId, documentId, pdfPath);
             return Results.Ok(new { documentId, pdfPath, pageCount = pages.Count });
+        });
+
+        // Download exported PDF bytes (for frontend upload to data-lake)
+        app.MapGet("/documents/{documentId}/pdf", (
+            string documentId,
+            StagingService staging,
+            HttpContext ctx) =>
+        {
+            var sessionId = ctx.Request.Query["sessionId"].ToString();
+            var dossierId = ctx.Request.Query["dossierId"].ToString();
+            if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(dossierId))
+                return Results.BadRequest("sessionId and dossierId query params required");
+
+            var session = staging.GetSession(sessionId);
+            if (session is null) return Results.NotFound("Session not found");
+
+            var dossier = session.Dossiers.FirstOrDefault(d => d.Id == dossierId);
+            if (dossier is null) return Results.NotFound("Dossier not found");
+
+            var doc = dossier.Documents.FirstOrDefault(d => d.Id == documentId);
+            if (doc is null) return Results.NotFound("Document not found");
+
+            var pdfPath = staging.GetExportPath(sessionId, dossierId, documentId);
+            if (!File.Exists(pdfPath))
+                return Results.NotFound("PDF not exported yet");
+
+            return Results.File(pdfPath, "application/pdf", $"{doc.Name}.pdf");
         });
     }
 }
