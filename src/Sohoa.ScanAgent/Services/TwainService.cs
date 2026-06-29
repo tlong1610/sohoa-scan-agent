@@ -1,8 +1,8 @@
-using System.Drawing.Imaging;
 using System.Net.Http.Headers;
 using System.Reflection;
 using NTwain;
 using NTwain.Data;
+using SkiaSharp;
 
 namespace Sohoa.ScanAgent.Services;
 
@@ -57,9 +57,13 @@ public class TwainService
                     return;
                 }
 
-                using var bmp = System.Drawing.Image.FromStream(imageStream);
-                imageStream.Dispose();
-                tcs.TrySetResult(EncodeJpeg(bmp));
+                using (imageStream)
+                using (var buffer = new MemoryStream())
+                {
+                    imageStream.CopyTo(buffer);
+                    buffer.Position = 0;
+                    tcs.TrySetResult(EncodeJpeg(buffer));
+                }
             }
             catch (Exception ex)
             {
@@ -134,15 +138,20 @@ public class TwainService
                 "No TWAIN source found. Install the Plustek PS4080U TWAIN driver and use the 32-bit (x86) Scan Agent build.");
     }
 
-    private static byte[] EncodeJpeg(System.Drawing.Image bmp)
+    /// <summary>
+    /// TWAIN native transfers are often 1bpp indexed BMP/DIB — GDI+ JPEG encoder fails on those.
+    /// SkiaSharp handles all common TWAIN pixel formats.
+    /// </summary>
+    private static byte[] EncodeJpeg(Stream imageStream)
     {
-        using var ms = new MemoryStream();
-        var encoder = ImageCodecInfo.GetImageEncoders()
-            .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-        using var encParams = new EncoderParameters(1);
-        encParams.Param[0] = new EncoderParameter(Encoder.Quality, 88L);
-        bmp.Save(ms, encoder, encParams);
-        return ms.ToArray();
+        using var bitmap = SKBitmap.Decode(imageStream)
+            ?? throw new InvalidOperationException("TWAIN returned an unreadable image.");
+
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, 88)
+            ?? throw new InvalidOperationException("Failed to encode scan as JPEG.");
+
+        return data.ToArray();
     }
 
     private static void ConfigureSource(DataSource source, int dpi, string colorMode)
